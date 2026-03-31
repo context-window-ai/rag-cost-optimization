@@ -11,9 +11,10 @@ model_name: sentence-transformers/all-MiniLM-L6-v2
 rerank: true
 rerank_model: cross-encoder/ms-marco-MiniLM-L-6-v2
 rerank_k: 10
+rerank_top_k: 10
 
 # LLM for generation (expensive model)
-llm_model: openai/gpt-4o
+llm_model: openai/gpt-5.4-mini
 llm_temperature: 0.0
 
 # High top_k for retrieval (expensive)

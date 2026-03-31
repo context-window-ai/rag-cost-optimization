@@ -16,7 +16,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from rag_retrieval.data import download_and_load_dataset
 from rag_retrieval.retriever import FAISSRetriever
-from rag_retrieval.pipeline import NaiveRAGPipeline, write_outputs
+from rag_retrieval.pipeline import NaiveRAGPipeline, OptimizedRAGPipeline, write_outputs
 
 logging.basicConfig(
     level=logging.INFO,
@@ -64,14 +64,43 @@ def main():
     retriever.build_index(corpus)
     logger.info("Index built successfully")
 
-    # Create pipeline
-    pipeline = NaiveRAGPipeline(
-        retriever=retriever,
-        model=config.get("llm_model", "gpt-4o"),
-        top_k=config.get("top_k", 100),
-        rerank_top_k=config.get("rerank_top_k", 10),
-        corpus=corpus,
-    )
+    # Create pipeline based on config type
+    # Use OptimizedRAGPipeline if any optimization levers are defined
+    is_optimized = any(key in config for key in [
+        "conditional_rerank", "model_routing", "cheap_model"
+    ])
+    
+    if is_optimized:
+        logger.info("Using OptimizedRAGPipeline with optimization levers:")
+        logger.info(f"  - lower_top_k: {config.get('top_k', 10)} (vs naive 100)")
+        logger.info(f"  - conditional_rerank: {config.get('conditional_rerank', True)}")
+        logger.info(f"  - model_routing: {config.get('model_routing', True)}")
+        pipeline = OptimizedRAGPipeline(
+            retriever=retriever,
+            model=config.get("llm_model", "openai/gpt-4o"),
+            cheap_model=config.get("cheap_model", "openai/gpt-4o-mini"),
+            top_k=config.get("top_k", 10),
+            rerank_top_k=config.get("rerank_k", 10),
+            corpus=corpus,
+            rerank_model=config.get("rerank_model", "cross-encoder/ms-marco-MiniLM-L-6-v2"),
+            temperature=config.get("llm_temperature", 0.0),
+            lower_top_k=True,  # Enabled by setting lower top_k
+            conditional_rerank=config.get("conditional_rerank", True),
+            model_routing=config.get("model_routing", True),
+            rerank_skip_threshold=config.get("rerank_skip_threshold", 0.85),
+            cheap_model_threshold=config.get("cheap_model_threshold", 0.80),
+        )
+    else:
+        logger.info("Using NaiveRAGPipeline (baseline)")
+        pipeline = NaiveRAGPipeline(
+            retriever=retriever,
+            model=config.get("llm_model", "openai/gpt-4o"),
+            top_k=config.get("top_k", 100),
+            rerank_top_k=config.get("rerank_k", 10),
+            corpus=corpus,
+            rerank_model=config.get("rerank_model", "cross-encoder/ms-marco-MiniLM-L-6-v2"),
+            temperature=config.get("llm_temperature", 0.0),
+        )
 
     # Determine demo subset (CLI overrides config)
     demo_subset = args.demo if args.demo is not None else config.get("demo_subset")
