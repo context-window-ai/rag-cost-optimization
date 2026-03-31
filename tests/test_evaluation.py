@@ -15,7 +15,7 @@ from rag_retrieval.evaluation import (
 
 def test_dcg_at_k():
     """Test DCG computation with boolean relevance."""
-    # Boolean relevance: True, True, False
+    # Boolean relevance
     relevances = [True, True, False, False, False]
     dcg = _dcg_at_k(relevances, k=5)
     # DCG = 1/log2(2) + 1/log2(3) = 1.0 + 0.631 = 1.631
@@ -30,26 +30,27 @@ def test_ndcg_at_k():
     """Test nDCG computation with boolean relevance."""
     # Perfect ranking (all relevant docs first)
     relevances = [True, True, True, False, False]
-    ndcg = _ndcg_at_k(relevances, total_relevant=3, k=5)
+    ndcg = _ndcg_at_k(relevances, 3, k=5)  # total_relevant=3
     assert ndcg == 1.0
 
     # Imperfect ranking
     relevances = [False, True, True, False, False]
-    ndcg = _ndcg_at_k(relevances, total_relevant=2, k=5)
+    ndcg = _ndcg_at_k(relevances, 2, k=5)  # total_relevant=2
     assert 0.0 < ndcg < 1.0
 
     # All zeros
     relevances = [False, False, False]
-    assert _ndcg_at_k(relevances, total_relevant=0, k=3) == 0.0
+    assert _ndcg_at_k(relevances, 0, k=3) == 0.0  # total_relevant=0
 
 
 def test_recall_at_k():
-    """Test Recall computation with boolean relevance."""
+    """Test Recall computation with binary relevance."""
     relevances = [True, False, True, False, True]
     total_relevant = 3
 
     recall = _recall_at_k(relevances, k=3, total_relevant=total_relevant)
-    assert recall == 1 / 3
+    # At k=3, we have [True, False, True] -> 2 relevant out of 3 total relevant
+    assert recall == 2 / 3
 
     recall = _recall_at_k(relevances, k=5, total_relevant=total_relevant)
     assert recall == 1.0
@@ -60,7 +61,7 @@ def test_recall_at_k():
 
 
 def test_precision_at_k():
-    """Test Precision computation with boolean relevance."""
+    """Test Precision computation with binary relevance."""
     relevances = [True, True, False, False, True]
 
     precision = _precision_at_k(relevances, k=2)
@@ -74,15 +75,15 @@ def test_precision_at_k():
 
 
 def test_average_precision():
-    """Test Average Precision computation with boolean relevance."""
-    # Perfect ranking
+    """Test Average Precision computation with binary relevance."""
+    # Perfect ranking - 3 relevant docs
     relevances = [True, True, True, False, False]
-    ap = _average_precision(relevances, total_relevant=3)
+    ap = _average_precision(relevances, 3)  # total_relevant=3
     assert ap == 1.0
 
-    # Mixed ranking
+    # Mixed ranking - 2 relevant docs
     relevances = [True, False, True, False, False]
-    ap = _average_precision(relevances, total_relevant=2)
+    ap = _average_precision(relevances, 2)  # total_relevant=2
     # Precision at rank 1: 1/1 = 1.0
     # Precision at rank 3: 2/3 = 0.667
     # AP = (1.0 + 0.667) / 2 = 0.833
@@ -90,16 +91,16 @@ def test_average_precision():
     np.testing.assert_allclose(ap, expected, rtol=1e-3)
 
     # No relevant documents
-    ap = _average_precision([False, False, False], total_relevant=0)
+    ap = _average_precision([False, False, False], 0)  # total_relevant=0
     assert ap == 0.0
 
 
 def test_evaluate_retrieval():
     """Test full evaluation pipeline."""
-    # Setup - results format: query_id -> {doc_id: score}
+    # Setup - results format: query_id -> list of (doc_id, score) tuples
     results = {
-        "q1": {"d1": 0.9, "d2": 0.8, "d3": 0.7},
-        "q2": {"d2": 0.9, "d1": 0.8, "d4": 0.7},
+        "q1": [("d1", 0.9), ("d2", 0.8), ("d3", 0.7)],
+        "q2": [("d2", 0.9), ("d1", 0.8), ("d4", 0.7)],
     }
 
     qrels = {
@@ -116,7 +117,7 @@ def test_evaluate_retrieval():
     assert "recall@3" in metrics
     assert "precision@1" in metrics
     assert "precision@3" in metrics
-    assert "map" in metrics  # Overall MAP
+    assert "map" in metrics
 
     # Check that metrics are between 0 and 1
     for metric_name, metric_value in metrics.items():
@@ -127,8 +128,8 @@ def test_evaluate_retrieval():
 def test_evaluate_retrieval_missing_query():
     """Test that queries without qrels are skipped."""
     results = {
-        "q1": {"d1": 0.9},
-        "q2": {"d2": 0.8},  # No qrels for q2
+        "q1": [("d1", 0.9)],
+        "q2": [("d2", 0.8)],  # No qrels for q2
     }
 
     qrels = {

@@ -66,17 +66,15 @@ def main():
     output_dir = Path(config["output_dir"])
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    save_metrics(output_metrics, str(output_dir))
-    print(f"\nSaved metrics to {output_dir}/metrics.json and {output_dir}/metrics.csv")
+    save_metrics(output_metrics, output_dir / "metrics.json")
+    print(f"\nSaved metrics to {output_dir / 'metrics.json'}")
 
-    save_results(results, str(output_dir))
-    print(f"Saved raw results to {output_dir}/results.json")
+    save_results(results, output_dir / "results.json")
+    print(f"Saved raw results to {output_dir / 'results.json'}")
 
-    # Save config copy
-    config_copy_path = output_dir / "config.json"
-    with open(config_copy_path, 'w') as f:
+    with open(output_dir / "config.json", 'w') as f:
         json.dump(config, f, indent=2)
-    print(f"Saved config to {config_copy_path}")
+    print(f"Saved config to {output_dir / 'config.json'}")
 
 
 if __name__ == "__main__":
