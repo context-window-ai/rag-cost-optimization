@@ -1,0 +1,7 @@
+# Baseline retrieval configuration
+dataset: scifact
+model_name: sentence-transformers/all-MiniLM-L6-v2
+top_k: 100
+batch_size: 32
+output_dir: outputs/baseline
+data_dir: datasets

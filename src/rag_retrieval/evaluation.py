@@ -1,0 +1,207 @@
+"""BEIR evaluation metrics."""
+import json
+from typing import Dict, List, Union
+from pathlib import Path
+import numpy as np
+
+
+def _dcg_at_k(relevances: List[int], k: int) -> float:
+    """Compute DCG@k using binary relevance.
+
+    Args:
+        relevances: List of binary relevance indicators in ranked order
+        k: Number of results to consider
+
+    Returns:
+        DCG@k score
+    """
+    if not relevances or k == 0:
+        return 0.0
+
+    relevances = relevances[:k]
+    dcg = 0.0
+    for i, rel in enumerate(relevances):
+        dcg += rel / np.log2(i + 2)
+    return dcg
+
+
+def _ndcg_at_k(relevances: List[int], k: int) -> float:
+    """Compute nDCG@k using binary relevance.
+
+    Args:
+        relevances: List of binary relevance indicators in ranked order
+        k: Number of results to consider
+
+    Returns:
+        nDCG@k score (0 to 1)
+    """
+    if not relevances or k == 0:
+        return 0.0
+
+    dcg = _dcg_at_k(relevances, k)
+    ideal_relevances = sorted(relevances, reverse=True)
+    idcg = _dcg_at_k(ideal_relevances, k)
+
+    return dcg / idcg if idcg > 0 else 0.0
+
+
+def _recall_at_k(relevances: List[int], k: int, total_relevant: int) -> float:
+    """Compute Recall@k.
+
+    Args:
+        relevances: List of binary relevance indicators in ranked order
+        k: Number of results to consider
+        total_relevant: Total number of relevant documents
+
+    Returns:
+        Recall@k score (0 to 1)
+    """
+    if total_relevant == 0 or k == 0:
+        return 0.0
+
+    relevances = relevances[:k]
+    return sum(relevances) / total_relevant
+
+
+def _precision_at_k(relevances: List[int], k: int) -> float:
+    """Compute Precision@k.
+
+    Args:
+        relevances: List of binary relevance indicators in ranked order
+        k: Number of results to consider
+
+    Returns:
+        Precision@k score (0 to 1)
+    """
+    if k == 0:
+        return 0.0
+
+    relevances = relevances[:k]
+    return sum(relevances) / k
+
+
+def _map_at_k(relevances: List[int], k: int) -> float:
+    """Compute Average Precision@k.
+
+    Args:
+        relevances: List of binary relevance indicators in ranked order
+        k: Number of results to consider
+
+    Returns:
+        AP@k score (0 to 1)
+    """
+    if not relevances or k == 0:
+        return 0.0
+
+    relevances = relevances[:k]
+    num_relevant = sum(relevances)
+
+    if num_relevant == 0:
+        return 0.0
+
+    precisions = []
+    for i, rel in enumerate(relevances):
+        if rel == 1:
+            precisions.append(_precision_at_k(relevances, i + 1))
+
+    return np.mean(precisions) if precisions else 0.0
+
+
+def _average_precision(relevances: List[int]) -> float:
+    """Compute Average Precision (alias for MAP with full length).
+
+    Args:
+        relevances: List of binary relevance indicators in ranked order
+
+    Returns:
+        AP score (0 to 1)
+    """
+    return _map_at_k(relevances, len(relevances) if relevances else 1)
+
+
+def evaluate_retrieval(
+    results: Dict[str, List[tuple]],
+    qrels: Dict[str, Dict[str, int]],
+    k_values: List[int] = [1, 3, 5, 10, 100]
+) -> Dict[str, float]:
+    """Evaluate retrieval results using BEIR metrics.
+
+    Args:
+        results: Dict mapping query_id to list of (doc_id, score) tuples
+        qrels: Dict mapping query_id to {doc_id: relevance}
+        k_values: List of k values for evaluation
+
+    Returns:
+        Dict of all metrics (ndcg, recall, precision at each k, and global map)
+    """
+    metrics = {}
+    all_ap_scores = []
+
+    # Initialize metric accumulators
+    for k in k_values:
+        metrics[f"ndcg@{k}"] = []
+        metrics[f"recall@{k}"] = []
+        metrics[f"precision@{k}"] = []
+        metrics[f"map@{k}"] = []
+
+    for query_id, doc_scores in results.items():
+        if query_id not in qrels:
+            continue
+
+        query_qrels = qrels[query_id]
+        total_relevant = sum(1 for rel in query_qrels.values() if rel > 0)
+
+        if total_relevant == 0:
+            continue
+
+        # Sort results by score descending and extract doc_ids
+        ranked_docs = sorted(doc_scores, key=lambda x: x[1], reverse=True)
+        ranked_doc_ids = [doc_id for doc_id, _ in ranked_docs]
+
+        for k in k_values:
+            # Get binary relevance for top-k docs
+            relevances = [1 if query_qrels.get(doc_id, 0) > 0 else 0 for doc_id in ranked_doc_ids[:k]]
+
+            # Compute metrics
+            metrics[f"ndcg@{k}"].append(_ndcg_at_k(relevances, k))
+            metrics[f"recall@{k}"].append(_recall_at_k(relevances, k, total_relevant))
+            metrics[f"precision@{k}"].append(_precision_at_k(relevances, k))
+            metrics[f"map@{k}"].append(_map_at_k(relevances, k))
+
+        # Also compute MAP at max k for global MAP
+        max_k = max(k_values)
+        relevances = [1 if query_qrels.get(doc_id, 0) > 0 else 0 for doc_id in ranked_doc_ids[:max_k]]
+        all_ap_scores.append(_map_at_k(relevances, max_k))
+
+    # Average metrics
+    final_metrics = {}
+    for metric_name, values in metrics.items():
+        final_metrics[metric_name] = np.mean(values) if values else 0.0
+
+    # Add global MAP (average of all query AP scores)
+    final_metrics["map"] = np.mean(all_ap_scores) if all_ap_scores else 0.0
+
+    return final_metrics
+
+
+def save_metrics(metrics: Dict[str, Union[str, float]], output_path: Path) -> None:
+    """Save metrics to JSON file."""
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(output_path, 'w') as f:
+        json.dump(metrics, f, indent=2)
+
+
+def save_results(results: Dict[str, List[tuple]], output_path: Path) -> None:
+    """Save raw retrieval results to JSON file."""
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # Convert tuples to lists for JSON serialization
+    results_serializable = {
+        query_id: [[doc_id, score] for doc_id, score in doc_scores]
+        for query_id, doc_scores in results.items()
+    }
+
+    with open(output_path, 'w') as f:
+        json.dump(results_serializable, f, indent=2)
