@@ -5,20 +5,22 @@ dataset: scifact
 data_dir: datasets
 
 # Embedding model for retrieval
-embedding_model: sentence-transformers/all-MiniLM-L6-v2
+model_name: sentence-transformers/all-MiniLM-L6-v2
+
+# Reranking - always enabled for naive pipeline
+rerank: true
+rerank_model: cross-encoder/ms-marco-MiniLM-L-6-v2
+rerank_k: 10
 
 # LLM for generation (expensive model)
-llm_model: gpt-4o
+llm_model: openai/gpt-4o
+llm_temperature: 0.0
 
 # High top_k for retrieval (expensive)
 top_k: 100
 
-# Rerank settings - always enabled for naive pipeline
-rerank: true
-rerank_top_k: 10
+# Demo subset - set to an integer to limit queries, or null for full dataset
+demo_subset: null
 
 # Output directory
 output_dir: outputs/naive
-
-# Demo subset (set to null to run all queries)
-demo_subset: null
