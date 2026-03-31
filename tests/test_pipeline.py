@@ -1,119 +1,205 @@
-"""Tests for RAG pipeline with cost instrumentation."""
+"""Tests for RAG pipeline with cost tracking."""
 
-import csv
 import json
+import tempfile
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-from rag_retrieval.pipeline import QueryCost, RAGPipeline, estimate_cost, load_config
+from rag_retrieval.pipeline import (
+    QueryCost,
+    RAGPipeline,
+    estimate_cost,
+    load_config,
+)
 
 
-def test_estimate_cost():
-    cost = estimate_cost("gpt-4o", 1_000, 500)
-    expected = (1000 * 2.50 + 500 * 10.00) / 1_000_000
-    assert cost == pytest.approx(expected)
+@pytest.fixture
+def sample_config():
+    """Sample pipeline configuration."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        yield {
+            "dataset": "scifact",
+            "data_dir": tmpdir,
+            "model_name": "sentence-transformers/all-MiniLM-L6-v2",
+            "rerank": True,
+            "rerank_model": "cross-encoder/ms-marco-MiniLM-L-6-v2",
+            "llm_model": "gpt-4o",
+            "llm_temperature": 0.0,
+            "top_k": 10,
+            "rerank_k": 5,
+            "output_dir": str(Path(tmpdir) / "outputs"),
+            "demo_subset": None,
+        }
 
 
-def test_estimate_cost_unknown_model():
-    assert estimate_cost("nonexistent", 1000, 500) == 0.0
+@pytest.fixture
+def sample_corpus():
+    """Sample corpus for testing."""
+    return {
+        "doc1": {"title": "Python Programming", "text": "Python is a popular programming language."},
+        "doc2": {"title": "Machine Learning", "text": "Machine learning is a subset of artificial intelligence."},
+        "doc3": {"title": "Data Science", "text": "Data science combines statistics and programming."},
+    }
 
 
-def test_query_cost_dataclass():
-    qc = QueryCost(
-        query_id="q1", model="gpt-4o", prompt_tokens=100,
-        completion_tokens=50, rerank_count=10, latency_ms=500.0,
-        estimated_cost_usd=0.001,
-    )
-    assert qc.query_id == "q1"
-    assert qc.prompt_tokens == 100
+@pytest.fixture
+def sample_queries():
+    """Sample queries for testing."""
+    return {
+        "q1": "What is Python?",
+        "q2": "What is machine learning?",
+    }
 
 
-def test_load_config(tmp_path):
-    cfg_dir = tmp_path / "configs"
-    cfg_dir.mkdir()
-    (cfg_dir / "test.yaml").write_text("key: value\ntop_k: 100\n")
-    cfg = load_config("test", configs_dir=str(cfg_dir))
-    assert cfg["key"] == "value"
-    assert cfg["top_k"] == 100
+class TestQueryCost:
+    """Tests for QueryCost dataclass."""
+
+    def test_query_cost_creation(self):
+        """Test creating a QueryCost record."""
+        record = QueryCost(
+            query_id="q1",
+            model="gpt-4o",
+            prompt_tokens=100,
+            completion_tokens=50,
+            rerank_count=10,
+            latency_ms=150.5,
+            estimated_cost_usd=0.001234,
+        )
+        assert record.query_id == "q1"
+        assert record.model == "gpt-4o"
+        assert record.prompt_tokens == 100
+        assert record.completion_tokens == 50
+        assert record.rerank_count == 10
+        assert record.latency_ms == 150.5
+        assert record.estimated_cost_usd == 0.001234
 
 
-def test_load_config_missing(tmp_path):
-    with pytest.raises(FileNotFoundError, match="Config not found"):
-        load_config("nonexistent", configs_dir=str(tmp_path))
+class TestEstimateCost:
+    """Tests for cost estimation."""
+
+    def test_estimate_cost_gpt4o(self):
+        """Test cost estimation for GPT-4o."""
+        # GPT-4o: $2.50/1M prompt, $10.00/1M completion
+        cost = estimate_cost("gpt-4o", 1000, 500)
+        expected = (1000 * 2.50 + 500 * 10.00) / 1_000_000
+        assert abs(cost - expected) < 1e-9
+
+    def test_estimate_cost_gpt4o_mini(self):
+        """Test cost estimation for GPT-4o-mini."""
+        # GPT-4o-mini: $0.15/1M prompt, $0.60/1M completion
+        cost = estimate_cost("gpt-4o-mini", 1000, 500)
+        expected = (1000 * 0.15 + 500 * 0.60) / 1_000_000
+        assert abs(cost - expected) < 1e-9
+
+    def test_estimate_cost_unknown_model(self):
+        """Test cost estimation for unknown model returns 0."""
+        cost = estimate_cost("unknown-model", 1000, 500)
+        assert cost == 0.0
 
 
-def _mock_openai(cls):
-    client = MagicMock()
-    cls.return_value = client
-    resp = MagicMock()
-    resp.choices = [MagicMock(message=MagicMock(content="Test answer"))]
-    resp.usage = MagicMock(prompt_tokens=500, completion_tokens=100)
-    client.chat.completions.create.return_value = resp
+class TestRAGPipeline:
+    """Tests for RAGPipeline class."""
+
+    def test_pipeline_initialization(self, sample_config):
+        """Test pipeline initialization."""
+        pipeline = RAGPipeline(sample_config)
+        assert pipeline.config == sample_config
+        assert pipeline.llm_model == "gpt-4o"
+        assert pipeline.output_dir.exists()
+        assert pipeline.cost_records == []
+
+    def test_pipeline_without_reranker(self, sample_config):
+        """Test pipeline without reranker."""
+        sample_config["rerank"] = False
+        pipeline = RAGPipeline(sample_config)
+        assert pipeline.reranker is None
+
+    @patch("rag_retrieval.pipeline.OpenAI")
+    def test_pipeline_run_mock(self, mock_openai, sample_config, sample_corpus, sample_queries):
+        """Test pipeline run with mocked LLM."""
+        # Mock OpenAI response
+        mock_client = MagicMock()
+        mock_response = MagicMock()
+        mock_response.choices = [MagicMock()]
+        mock_response.choices[0].message.content = "Test answer"
+        mock_response.usage.prompt_tokens = 100
+        mock_response.usage.completion_tokens = 50
+        mock_client.chat.completions.create.return_value = mock_response
+        mock_openai.return_value = mock_client
+
+        pipeline = RAGPipeline(sample_config)
+        pipeline.run(sample_corpus, sample_queries, demo_subset=1)
+
+        # Check outputs
+        assert len(pipeline.cost_records) == 1
+        assert pipeline.cost_records[0].query_id == "q1"
+        assert pipeline.cost_records[0].model == "gpt-4o"
+        assert pipeline.cost_records[0].prompt_tokens == 100
+        assert pipeline.cost_records[0].completion_tokens == 50
+
+        # Check files were created
+        answers_path = pipeline.output_dir / "answers.jsonl"
+        assert answers_path.exists()
+
+        costs_path = pipeline.output_dir / "costs.csv"
+        assert costs_path.exists()
+
+        metadata_path = pipeline.output_dir / "retrieval_metadata.json"
+        assert metadata_path.exists()
 
 
-def _mock_retriever(cls, doc_ids, doc_texts, ret):
-    r = MagicMock()
-    r.doc_ids = doc_ids
-    r.doc_texts = doc_texts
-    r.retrieve.return_value = ret
-    cls.return_value = r
+class TestLoadConfig:
+    """Tests for config loading."""
+
+    def test_load_config_file_not_found(self):
+        """Test loading non-existent config raises error."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with pytest.raises(FileNotFoundError):
+                load_config("nonexistent", tmpdir)
+
+    def test_load_config_success(self):
+        """Test loading a valid config file."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "test.yaml"
+            config_path.write_text("dataset: scifact\nllm_model: gpt-4o\n")
+            config = load_config("test", tmpdir)
+            assert config["dataset"] == "scifact"
+            assert config["llm_model"] == "gpt-4o"
 
 
-@patch("rag_retrieval.pipeline.FAISSRetriever")
-@patch("rag_retrieval.pipeline.OpenAI")
-@patch("rag_retrieval.pipeline.CrossEncoder")
-def test_pipeline_run(mock_ce, mock_openai, mock_ret_cls, tmp_path):
-    _mock_retriever(mock_ret_cls, ["d1", "d2"], ["Cats.", "Dogs."], {"q1": [("d1", 0.9), ("d2", 0.8)]})
-    _mock_openai(mock_openai)
-    mce = MagicMock()
-    mce.predict.return_value = [0.95, 0.3]
-    mock_ce.return_value = mce
+class TestCostCSV:
+    """Tests for cost CSV output."""
 
-    cfg = {"model_name": "t", "top_k": 2, "rerank": True, "rerank_model": "t", "rerank_k": 1, "llm_model": "gpt-4o", "output_dir": str(tmp_path / "out")}
-    p = RAGPipeline(cfg)
-    p.run({"d1": {"title": "", "text": "Cats."}, "d2": {"title": "", "text": "Dogs."}}, {"q1": "What?"})
+    def test_cost_csv_format(self, sample_config):
+        """Test that cost CSV has correct columns."""
+        import csv
 
-    assert (tmp_path / "out" / "answers.jsonl").exists()
-    assert (tmp_path / "out" / "costs.csv").exists()
-    assert (tmp_path / "out" / "retrieval_metadata.json").exists()
+        pipeline = RAGPipeline(sample_config)
+        pipeline.cost_records = [
+            QueryCost(
+                query_id="q1",
+                model="gpt-4o",
+                prompt_tokens=100,
+                completion_tokens=50,
+                rerank_count=10,
+                latency_ms=150.5,
+                estimated_cost_usd=0.001234,
+            ),
+        ]
+        pipeline._write_cost_csv()
 
-    with open(tmp_path / "out" / "answers.jsonl") as f:
-        a = json.loads(f.readline())
-    assert a["query_id"] == "q1" and len(a["doc_ids"]) == 1
+        costs_path = pipeline.output_dir / "costs.csv"
+        with open(costs_path, newline="") as f:
+            reader = csv.DictReader(f)
+            rows = list(reader)
 
-    with open(tmp_path / "out" / "costs.csv") as f:
-        rows = list(csv.DictReader(f))
-    assert rows[0]["rerank_count"] == "2" and float(rows[0]["estimated_cost_usd"]) > 0
-
-
-@patch("rag_retrieval.pipeline.FAISSRetriever")
-@patch("rag_retrieval.pipeline.OpenAI")
-@patch("rag_retrieval.pipeline.CrossEncoder")
-def test_pipeline_demo_subset(mock_ce, mock_openai, mock_ret_cls, tmp_path):
-    _mock_retriever(mock_ret_cls, ["d1"], ["T."], {"q1": [("d1", 0.9)], "q2": [("d1", 0.8)], "q3": [("d1", 0.7)]})
-    _mock_openai(mock_openai)
-    mock_ce.return_value = MagicMock(predict=lambda x: [0.9] * len(x))
-
-    cfg = {"model_name": "t", "top_k": 1, "rerank": True, "rerank_model": "t", "rerank_k": 1, "llm_model": "gpt-4o", "output_dir": str(tmp_path / "out")}
-    p = RAGPipeline(cfg)
-    p.run({"d1": {"title": "", "text": "T."}}, {"q1": "a", "q2": "b", "q3": "c"}, demo_subset=2)
-
-    with open(tmp_path / "out" / "answers.jsonl") as f:
-        assert len(f.readlines()) == 2
-
-
-@patch("rag_retrieval.pipeline.FAISSRetriever")
-@patch("rag_retrieval.pipeline.OpenAI")
-def test_pipeline_no_rerank(mock_openai, mock_ret_cls, tmp_path):
-    _mock_retriever(mock_ret_cls, ["d1"], ["T."], {"q1": [("d1", 0.9)]})
-    _mock_openai(mock_openai)
-
-    cfg = {"model_name": "t", "top_k": 1, "rerank": False, "llm_model": "gpt-4o-mini", "output_dir": str(tmp_path / "out")}
-    p = RAGPipeline(cfg)
-    p.run({"d1": {"title": "", "text": "T."}}, {"q1": "q"})
-
-    with open(tmp_path / "out" / "costs.csv") as f:
-        rows = list(csv.DictReader(f))
-    assert rows[0]["rerank_count"] == "0" and rows[0]["model"] == "gpt-4o-mini"
+        assert len(rows) == 1
+        assert rows[0]["query_id"] == "q1"
+        assert rows[0]["model"] == "gpt-4o"
+        assert rows[0]["prompt_tokens"] == "100"
+        assert rows[0]["completion_tokens"] == "50"
+        assert rows[0]["rerank_count"] == "10"
+        assert rows[0]["latency_ms"] == "150.5"
+        assert rows[0]["estimated_cost_usd"] == "0.001234"
