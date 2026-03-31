@@ -1,15 +1,17 @@
 """BEIR evaluation metrics."""
+
 import json
-from typing import Dict, List, Union
 from pathlib import Path
+from typing import Dict, List, Union
+
 import numpy as np
 
 
 def _dcg_at_k(relevances: List[int], k: int) -> float:
-    """Compute DCG@k using binary relevance.
+    """Compute DCG@k using graded relevance.
 
     Args:
-        relevances: List of binary relevance indicators in ranked order
+        relevances: List of graded relevance scores (0, 1, 2, ...) in ranked order
         k: Number of results to consider
 
     Returns:
@@ -26,10 +28,10 @@ def _dcg_at_k(relevances: List[int], k: int) -> float:
 
 
 def _ndcg_at_k(relevances: List[int], k: int) -> float:
-    """Compute nDCG@k using binary relevance.
+    """Compute nDCG@k using graded relevance.
 
     Args:
-        relevances: List of binary relevance indicators in ranked order
+        relevances: List of graded relevance scores (0, 1, 2, ...) in ranked order
         k: Number of results to consider
 
     Returns:
@@ -49,7 +51,7 @@ def _recall_at_k(relevances: List[int], k: int, total_relevant: int) -> float:
     """Compute Recall@k.
 
     Args:
-        relevances: List of binary relevance indicators in ranked order
+        relevances: List of binary relevance indicators (0 or 1) in ranked order
         k: Number of results to consider
         total_relevant: Total number of relevant documents
 
@@ -67,7 +69,7 @@ def _precision_at_k(relevances: List[int], k: int) -> float:
     """Compute Precision@k.
 
     Args:
-        relevances: List of binary relevance indicators in ranked order
+        relevances: List of binary relevance indicators (0 or 1) in ranked order
         k: Number of results to consider
 
     Returns:
@@ -84,7 +86,7 @@ def _map_at_k(relevances: List[int], k: int) -> float:
     """Compute Average Precision@k.
 
     Args:
-        relevances: List of binary relevance indicators in ranked order
+        relevances: List of binary relevance indicators (0 or 1) in ranked order
         k: Number of results to consider
 
     Returns:
@@ -104,36 +106,27 @@ def _map_at_k(relevances: List[int], k: int) -> float:
         if rel == 1:
             precisions.append(_precision_at_k(relevances, i + 1))
 
-    return np.mean(precisions) if precisions else 0.0
-
-
-def _average_precision(relevances: List[int]) -> float:
-    """Compute Average Precision (alias for MAP with full length).
-
-    Args:
-        relevances: List of binary relevance indicators in ranked order
-
-    Returns:
-        AP score (0 to 1)
-    """
-    return _map_at_k(relevances, len(relevances) if relevances else 1)
+    return float(np.mean(precisions)) if precisions else 0.0
 
 
 def evaluate_retrieval(
-    results: Dict[str, List[tuple]],
+    results: Dict[str, Union[Dict[str, float], List[tuple]]],
     qrels: Dict[str, Dict[str, int]],
-    k_values: List[int] = [1, 3, 5, 10, 100]
+    k_values: List[int] = None
 ) -> Dict[str, float]:
     """Evaluate retrieval results using BEIR metrics.
 
     Args:
-        results: Dict mapping query_id to list of (doc_id, score) tuples
+        results: Dict mapping query_id to {doc_id: score} or list of (doc_id, score) tuples
         qrels: Dict mapping query_id to {doc_id: relevance}
         k_values: List of k values for evaluation
 
     Returns:
-        Dict of all metrics (ndcg, recall, precision at each k, and global map)
+        Dict of all metrics (ndcg, recall, precision, map at each k, and global map)
     """
+    if k_values is None:
+        k_values = [1, 3, 5, 10, 100]
+
     metrics = {}
     all_ap_scores = []
 
@@ -154,54 +147,94 @@ def evaluate_retrieval(
         if total_relevant == 0:
             continue
 
-        # Sort results by score descending and extract doc_ids
-        ranked_docs = sorted(doc_scores, key=lambda x: x[1], reverse=True)
-        ranked_doc_ids = [doc_id for doc_id, _ in ranked_docs]
+        # Handle both dict and list formats
+        if isinstance(doc_scores, list):
+            # List of (doc_id, score) tuples - already sorted
+            ranked_doc_ids = [doc_id for doc_id, _ in doc_scores]
+        else:
+            # Dict format - sort by score descending
+            ranked_docs = sorted(doc_scores.items(), key=lambda x: x[1], reverse=True)
+            ranked_doc_ids = [doc_id for doc_id, _ in ranked_docs]
+
+        # Get graded relevance for nDCG
+        graded_relevances = [query_qrels.get(doc_id, 0) for doc_id in ranked_doc_ids]
+        
+        # Get binary relevance for recall/precision/MAP
+        binary_relevances = [1 if query_qrels.get(doc_id, 0) > 0 else 0 for doc_id in ranked_doc_ids]
 
         for k in k_values:
-            # Get binary relevance for top-k docs
-            relevances = [1 if query_qrels.get(doc_id, 0) > 0 else 0 for doc_id in ranked_doc_ids[:k]]
+            metrics[f"ndcg@{k}"].append(_ndcg_at_k(graded_relevances, k))
+            metrics[f"recall@{k}"].append(_recall_at_k(binary_relevances, k, total_relevant))
+            metrics[f"precision@{k}"].append(_precision_at_k(binary_relevances, k))
+            metrics[f"map@{k}"].append(_map_at_k(binary_relevances, k))
 
-            # Compute metrics
-            metrics[f"ndcg@{k}"].append(_ndcg_at_k(relevances, k))
-            metrics[f"recall@{k}"].append(_recall_at_k(relevances, k, total_relevant))
-            metrics[f"precision@{k}"].append(_precision_at_k(relevances, k))
-            metrics[f"map@{k}"].append(_map_at_k(relevances, k))
-
-        # Also compute MAP at max k for global MAP
+        # Compute AP for this query (at max k)
         max_k = max(k_values)
-        relevances = [1 if query_qrels.get(doc_id, 0) > 0 else 0 for doc_id in ranked_doc_ids[:max_k]]
-        all_ap_scores.append(_map_at_k(relevances, max_k))
+        all_ap_scores.append(_map_at_k(binary_relevances, max_k))
 
     # Average metrics
     final_metrics = {}
     for metric_name, values in metrics.items():
-        final_metrics[metric_name] = np.mean(values) if values else 0.0
+        final_metrics[metric_name] = float(np.mean(values)) if values else 0.0
 
     # Add global MAP (average of all query AP scores)
-    final_metrics["map"] = np.mean(all_ap_scores) if all_ap_scores else 0.0
+    final_metrics["map"] = float(np.mean(all_ap_scores)) if all_ap_scores else 0.0
 
     return final_metrics
 
 
-def save_metrics(metrics: Dict[str, Union[str, float]], output_path: Path) -> None:
-    """Save metrics to JSON file."""
-    output_path = Path(output_path)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(output_path, 'w') as f:
+def save_metrics(metrics: Dict[str, Union[str, float]], output_dir: Union[str, Path]) -> None:
+    """Save metrics to JSON and CSV files.
+
+    Args:
+        metrics: Dict with metric names and values
+        output_dir: Directory to save metrics files
+    """
+    import pandas as pd
+
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    # Save JSON
+    with open(output_dir / "metrics.json", "w") as f:
         json.dump(metrics, f, indent=2)
 
+    # Save CSV
+    df = pd.DataFrame([metrics])
+    df.to_csv(output_dir / "metrics.csv", index=False)
 
-def save_results(results: Dict[str, List[tuple]], output_path: Path) -> None:
-    """Save raw retrieval results to JSON file."""
-    output_path = Path(output_path)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    # Convert tuples to lists for JSON serialization
-    results_serializable = {
-        query_id: [[doc_id, score] for doc_id, score in doc_scores]
-        for query_id, doc_scores in results.items()
-    }
+def save_results(
+    results: Dict[str, Union[Dict[str, float], List[tuple]]],
+    output_dir: Union[str, Path],
+    query_ids: List[str] = None
+) -> None:
+    """Save raw retrieval results to JSON.
 
-    with open(output_path, 'w') as f:
+    Args:
+        results: Dict mapping query_id to {doc_id: score} or list of (doc_id, score) tuples
+        output_dir: Directory to save results file
+        query_ids: Optional list of query IDs to include (if None, include all)
+    """
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    # Filter by query_ids if provided
+    if query_ids is not None:
+        results = {qid: results[qid] for qid in query_ids if qid in results}
+
+    # Convert to list format sorted by score
+    results_serializable = {}
+    for query_id, doc_scores in results.items():
+        # Handle both dict and list formats
+        if isinstance(doc_scores, list):
+            sorted_docs = doc_scores  # Already a list of tuples
+        else:
+            sorted_docs = sorted(doc_scores.items(), key=lambda x: x[1], reverse=True)
+        results_serializable[query_id] = [
+            {"doc_id": doc_id, "score": round(score, 6)}
+            for doc_id, score in sorted_docs
+        ]
+
+    with open(output_dir / "results.json", "w") as f:
         json.dump(results_serializable, f, indent=2)
