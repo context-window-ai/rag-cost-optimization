@@ -1,0 +1,23 @@
+# Step 3: Lower top_k (100 -> 10)
+# top_k=10, always rerank, model=openai/gpt-5.4-mini, no routing
+
+dataset: scifact
+data_dir: datasets
+
+# Embedding model for retrieval
+embedding_model: sentence-transformers/all-MiniLM-L6-v2
+
+# Reranking - always enabled
+rerank: true
+rerank_model: cross-encoder/ms-marco-MiniLM-L-6-v2
+rerank_k: 10
+
+# LLM for generation (cheaper GPT-5.4-mini model)
+llm_model: openai/gpt-5.4-mini
+llm_temperature: 0.0
+
+# Lower top_k for retrieval
+top_k: 10
+
+# Output directory
+output_dir: outputs/ladder/step3_lower_topk
