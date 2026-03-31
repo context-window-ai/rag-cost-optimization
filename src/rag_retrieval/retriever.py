@@ -13,6 +13,7 @@ class FAISSRetriever:
     """FAISS-based dense retriever using sentence-transformers."""
 
     def __init__(self, model_name: str = "sentence-transformers/all-MiniLM-L6-v2"):
+        self.model_name = model_name
         self.model = SentenceTransformer(model_name)
         self.index: Optional[faiss.IndexFlatIP] = None
         self.doc_ids: list[str] = []
@@ -82,7 +83,7 @@ class FAISSRetriever:
         # Save metadata
         metadata = {
             "doc_ids": self.doc_ids,
-            "model_name": self.model._model_name,
+            "model_name": self.model_name,
         }
         with open(path / "metadata.json", "w") as f:
             json.dump(metadata, f)
@@ -121,7 +122,7 @@ class FAISSRetriever:
             top_k: Number of documents to retrieve per query
             
         Returns:
-            Dict mapping query_id -> list of (doc_id, score) tuples
+            Dict mapping query_id -> {doc_id: score}
         """
         query_ids = list(queries.keys())
         query_texts = [queries[qid] for qid in query_ids]
@@ -135,11 +136,11 @@ class FAISSRetriever:
         # Format results with query_id keys
         results = {}
         for i, query_id in enumerate(query_ids):
-            results[query_id] = [
-                (self.doc_ids[idx], float(scores[i, j]))
+            results[query_id] = {
+                self.doc_ids[idx]: float(scores[i, j])
                 for j, idx in enumerate(indices[i])
                 if idx >= 0
-            ]
+            }
         
         return results
 

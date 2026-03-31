@@ -1,0 +1,24 @@
+# Naive RAG pipeline configuration - intentionally expensive baseline
+# This is the "before" in the before/after comparison
+
+dataset: scifact
+data_dir: datasets
+
+# Embedding model for retrieval
+embedding_model: sentence-transformers/all-MiniLM-L6-v2
+
+# LLM for generation (expensive model)
+llm_model: gpt-4o
+
+# High top_k for retrieval (expensive)
+top_k: 100
+
+# Rerank settings - always enabled for naive pipeline
+rerank: true
+rerank_top_k: 10
+
+# Output directory
+output_dir: outputs/naive
+
+# Demo subset (set to null to run all queries)
+demo_subset: null

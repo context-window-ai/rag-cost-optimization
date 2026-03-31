@@ -8,15 +8,15 @@ from rag_retrieval.evaluation import (
     _ndcg_at_k,
     _recall_at_k,
     _precision_at_k,
-    _average_precision,
+    _map_at_k,
     evaluate_retrieval,
 )
 
 
 def test_dcg_at_k():
-    """Test DCG computation with boolean relevance."""
-    # Boolean relevance: True, True, False
-    relevances = [True, True, False, False, False]
+    """Test DCG computation with binary relevance."""
+    # Binary relevance: 1, 1, 0, 0, 0
+    relevances = [1, 1, 0, 0, 0]
     dcg = _dcg_at_k(relevances, k=5)
     # DCG = 1/log2(2) + 1/log2(3) = 1.0 + 0.631 = 1.631
     expected = 1.0 / np.log2(2) + 1.0 / np.log2(3)
@@ -27,41 +27,42 @@ def test_dcg_at_k():
 
 
 def test_ndcg_at_k():
-    """Test nDCG computation with boolean relevance."""
+    """Test nDCG computation with binary relevance."""
     # Perfect ranking (all relevant docs first)
-    relevances = [True, True, True, False, False]
-    ndcg = _ndcg_at_k(relevances, total_relevant=3, k=5)
+    relevances = [1, 1, 1, 0, 0]
+    ndcg = _ndcg_at_k(relevances, k=5)
     assert ndcg == 1.0
 
     # Imperfect ranking
-    relevances = [False, True, True, False, False]
-    ndcg = _ndcg_at_k(relevances, total_relevant=2, k=5)
+    relevances = [0, 1, 1, 0, 0]
+    ndcg = _ndcg_at_k(relevances, k=5)
     assert 0.0 < ndcg < 1.0
 
     # All zeros
-    relevances = [False, False, False]
-    assert _ndcg_at_k(relevances, total_relevant=0, k=3) == 0.0
+    relevances = [0, 0, 0]
+    assert _ndcg_at_k(relevances, k=3) == 0.0
 
 
 def test_recall_at_k():
-    """Test Recall computation with boolean relevance."""
-    relevances = [True, False, True, False, True]
+    """Test Recall computation with binary relevance."""
+    relevances = [1, 0, 1, 0, 1]
     total_relevant = 3
 
+    # At k=3, we have [1, 0, 1] = 2 relevant out of 3 total
     recall = _recall_at_k(relevances, k=3, total_relevant=total_relevant)
-    assert recall == 1 / 3
+    assert recall == 2 / 3
 
     recall = _recall_at_k(relevances, k=5, total_relevant=total_relevant)
     assert recall == 1.0
 
     # No relevant documents
-    recall = _recall_at_k([False, False, False], k=3, total_relevant=0)
+    recall = _recall_at_k([0, 0, 0], k=3, total_relevant=0)
     assert recall == 0.0
 
 
 def test_precision_at_k():
-    """Test Precision computation with boolean relevance."""
-    relevances = [True, True, False, False, True]
+    """Test Precision computation with binary relevance."""
+    relevances = [1, 1, 0, 0, 1]
 
     precision = _precision_at_k(relevances, k=2)
     assert precision == 1.0
@@ -73,25 +74,25 @@ def test_precision_at_k():
     assert precision == 0.0
 
 
-def test_average_precision():
-    """Test Average Precision computation with boolean relevance."""
+def test_map_at_k():
+    """Test MAP computation with binary relevance."""
     # Perfect ranking
-    relevances = [True, True, True, False, False]
-    ap = _average_precision(relevances, total_relevant=3)
-    assert ap == 1.0
+    relevances = [1, 1, 1, 0, 0]
+    map_score = _map_at_k(relevances, k=5)
+    assert map_score == 1.0
 
     # Mixed ranking
-    relevances = [True, False, True, False, False]
-    ap = _average_precision(relevances, total_relevant=2)
+    relevances = [1, 0, 1, 0, 0]
+    map_score = _map_at_k(relevances, k=5)
     # Precision at rank 1: 1/1 = 1.0
     # Precision at rank 3: 2/3 = 0.667
-    # AP = (1.0 + 0.667) / 2 = 0.833
+    # MAP = (1.0 + 0.667) / 2 = 0.833
     expected = (1.0 + 2 / 3) / 2
-    np.testing.assert_allclose(ap, expected, rtol=1e-3)
+    np.testing.assert_allclose(map_score, expected, rtol=1e-3)
 
     # No relevant documents
-    ap = _average_precision([False, False, False], total_relevant=0)
-    assert ap == 0.0
+    map_score = _map_at_k([0, 0, 0], k=3)
+    assert map_score == 0.0
 
 
 def test_evaluate_retrieval():
@@ -120,8 +121,7 @@ def test_evaluate_retrieval():
 
     # Check that metrics are between 0 and 1
     for metric_name, metric_value in metrics.items():
-        if metric_name not in ("num_queries", "num_qrels"):
-            assert 0.0 <= metric_value <= 1.0, f"{metric_name} out of range: {metric_value}"
+        assert 0.0 <= metric_value <= 1.0, f"{metric_name} out of range: {metric_value}"
 
 
 def test_evaluate_retrieval_missing_query():
@@ -141,5 +141,4 @@ def test_evaluate_retrieval_missing_query():
     assert len(metrics) > 0
     # All metrics should be valid (from q1 only)
     for metric_name, metric_value in metrics.items():
-        if metric_name not in ("num_queries", "num_qrels"):
-            assert 0.0 <= metric_value <= 1.0
+        assert 0.0 <= metric_value <= 1.0
