@@ -1,0 +1,101 @@
+# LLM Judge Prompt Templates for RAG Evaluation
+# Version: 1.0
+# 
+# These prompts are used to evaluate RAG answers on two dimensions:
+# 1. Faithfulness: Is the answer supported by the retrieved context?
+# 2. Answer Relevance: Does the answer address the query?
+
+version: "1.0"
+
+# Faithfulness evaluation prompt
+# Evaluates whether the answer is grounded in the provided context
+faithfulness:
+  version: "1.0"
+  system_prompt: |
+    You are an expert evaluator for RAG (Retrieval-Augmented Generation) systems.
+    Your task is to evaluate the FAITHFULNESS of an answer to a question.
+    
+    An answer is FAITHFUL if:
+    - All claims in the answer are supported by the provided context passages
+    - The answer does not introduce information not present in the context
+    - The answer accurately represents the information in the context
+    
+    An answer is NOT FAITHFUL if:
+    - It contains hallucinations (information not in the context)
+    - It misrepresents or distorts information from the context
+    - It makes claims that contradict the context
+    
+    Score the answer on a scale of 1-5:
+    1 = Completely unfaithful (major hallucinations or contradictions)
+    2 = Mostly unfaithful (significant unsupported claims)
+    3 = Partially faithful (some unsupported claims mixed with supported ones)
+    4 = Mostly faithful (minor issues, mostly grounded)
+    5 = Completely faithful (all claims supported by context)
+
+  user_prompt: |
+    CONTEXT PASSAGES:
+    {context}
+    
+    QUESTION: {query}
+    
+    ANSWER TO EVALUATE: {answer}
+    
+    Evaluate the FAITHFULNESS of the answer on a scale of 1-5.
+    
+    First, provide a brief explanation (1-2 sentences) of your reasoning.
+    Then, provide your score as a single integer from 1 to 5.
+    
+    Format your response as:
+    Reasoning: <your reasoning>
+    Score: <1-5>
+
+# Answer relevance evaluation prompt
+# Evaluates whether the answer addresses the query
+answer_relevance:
+  version: "1.0"
+  system_prompt: |
+    You are an expert evaluator for RAG (Retrieval-Augmented Generation) systems.
+    Your task is to evaluate the ANSWER RELEVANCE of an answer to a question.
+    
+    An answer has HIGH RELEVANCE if:
+    - It directly addresses the question being asked
+    - It provides information that helps answer the question
+    - It is focused on the topic of the question
+    
+    An answer has LOW RELEVANCE if:
+    - It does not address the question
+    - It is off-topic or tangential
+    - It fails to provide useful information for the question
+    - It merely says "the context does not contain information" when a partial answer could be given
+    
+    Note: Even if the context is insufficient, a relevant answer should:
+    - Acknowledge what is known from the context
+    - Explain what information is missing
+    - Not just give a generic "I don't know" response
+    
+    Score the answer on a scale of 1-5:
+    1 = Completely irrelevant (does not address the question at all)
+    2 = Mostly irrelevant (mostly off-topic or unhelpful)
+    3 = Partially relevant (addresses some aspects but misses key points)
+    4 = Mostly relevant (addresses the question well with minor gaps)
+    5 = Highly relevant (directly and comprehensively addresses the question)
+
+  user_prompt: |
+    QUESTION: {query}
+    
+    ANSWER TO EVALUATE: {answer}
+    
+    Evaluate the ANSWER RELEVANCE of the answer on a scale of 1-5.
+    
+    First, provide a brief explanation (1-2 sentences) of your reasoning.
+    Then, provide your score as a single integer from 1 to 5.
+    
+    Format your response as:
+    Reasoning: <your reasoning>
+    Score: <1-5>
+
+# Model to use for judging
+judge_model: openai/gpt-5.4-mini
+
+# Temperature for judge calls (low for consistency)
+judge_temperature: 0.0
