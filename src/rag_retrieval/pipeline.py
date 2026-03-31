@@ -20,7 +20,7 @@ OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 
 # Per-1M-token pricing (USD)
 MODEL_PRICING = {
-    "openai/gpt-4o-mini": {"prompt": 0.15, "completion": 0.60},
+    "openai/gpt-5.4-mini": {"prompt": 0.75, "completion": 4.50},
     "openai/gpt-4o": {"prompt": 2.50, "completion": 10.00},
     "gpt-4o": {"prompt": 2.50, "completion": 10.00},
     "openai/gpt-4o-mini": {"prompt": 0.15, "completion": 0.60},
