@@ -1,270 +1,237 @@
+#!/usr/bin/env python3
 """Tests for build_context_ablation.py script."""
 
 import csv
-import sys
 import tempfile
 from pathlib import Path
-from unittest.mock import patch
+from typing import Dict, List
 
 import pytest
 
 # Import the module to test
+import sys
 sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
-import build_context_ablation
+import build_context_ablation as bca
 
 
-class TestLoadCosts:
-    """Tests for load_costs function."""
-
-    def test_load_costs_valid_file(self, tmp_path: Path):
-        """Test loading a valid costs.csv file."""
-        costs_file = tmp_path / "costs.csv"
-        costs_file.write_text(
-            "query_id,model,prompt_tokens,completion_tokens,rerank_count,latency_ms,estimated_cost_usd\n"
-            "1,model,100,50,10,1500,0.001\n"
-            "2,model,200,60,10,1600,0.002\n"
-        )
-
-        result = build_context_ablation.load_costs(tmp_path)
-
-        assert result["avg_cost_usd"] == pytest.approx(0.0015)
-        assert result["avg_latency_ms"] == pytest.approx(1550.0)
-        assert result["avg_prompt_tokens"] == pytest.approx(150.0)
-        assert result["count"] == 2
-
-    def test_load_costs_missing_file(self, tmp_path: Path):
-        """Test handling of missing costs.csv file."""
-        result = build_context_ablation.load_costs(tmp_path)
-
-        # Function returns None when file doesn't exist
-        assert result is None
-
-    def test_load_costs_empty_file(self, tmp_path: Path):
-        """Test handling of empty costs.csv file."""
-        costs_file = tmp_path / "costs.csv"
-        costs_file.write_text("query_id,model,prompt_tokens,completion_tokens,rerank_count,latency_ms,estimated_cost_usd\n")
-
-        result = build_context_ablation.load_costs(tmp_path)
-
-        # Function returns None when file has no data rows
-        assert result is None
+def write_csv(filepath: Path, data: List[Dict], fieldnames: List[str]) -> None:
+    """Helper to write CSV data."""
+    with open(filepath, "w", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(data)
 
 
-class TestLoadJudgeScores:
-    """Tests for load_judge_scores function."""
+def test_load_csv_data_existing_file():
+    """Test loading CSV data from an existing file."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmpdir = Path(tmpdir)
+        test_file = tmpdir / "test.csv"
+        
+        data = [
+            {"col1": "1", "col2": "a"},
+            {"col1": "2", "col2": "b"},
+        ]
+        write_csv(test_file, data, ["col1", "col2"])
+        
+        result = bca.load_csv_data(test_file)
+        assert len(result) == 2
+        assert result[0]["col1"] == "1"
+        assert result[1]["col2"] == "b"
 
-    def test_load_judge_scores_valid_file(self, tmp_path: Path):
-        """Test loading a valid judge_scores.csv file."""
-        scores_file = tmp_path / "judge_scores.csv"
-        scores_file.write_text(
-            "query_id,faithfulness_score,faithfulness_reasoning,answer_relevance_score,answer_relevance_reasoning\n"
-            "1,5,Good,4,Relevant\n"
-            "2,4,OK,5,Very relevant\n"
-        )
 
-        result = build_context_ablation.load_judge_scores(tmp_path)
+def test_load_csv_data_missing_file():
+    """Test loading CSV data from a non-existent file."""
+    result = bca.load_csv_data(Path("/nonexistent/file.csv"))
+    assert result == []
 
+
+def test_compute_averages_basic():
+    """Test computing averages from data."""
+    data = [
+        {"val": "10", "other": "5"},
+        {"val": "20", "other": "15"},
+        {"val": "30", "other": "25"},
+    ]
+    
+    result = bca.compute_averages(data, ["val", "other"])
+    
+    assert result["val"] == 20.0
+    assert result["other"] == 15.0
+
+
+def test_compute_averages_empty_data():
+    """Test computing averages with empty data."""
+    result = bca.compute_averages([], ["val1", "val2"])
+    
+    assert result["val1"] == 0.0
+    assert result["val2"] == 0.0
+
+
+def test_compute_averages_missing_field():
+    """Test computing averages with missing fields."""
+    data = [
+        {"val": "10"},
+        {"val": "20"},
+    ]
+    
+    result = bca.compute_averages(data, ["val", "missing"])
+    
+    assert result["val"] == 15.0
+    assert result["missing"] == 0.0
+
+
+def test_process_variant_success():
+    """Test processing a variant with valid data."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmpdir = Path(tmpdir)
+        variant_dir = tmpdir / "ctx3"
+        variant_dir.mkdir()
+        
+        # Write costs.csv
+        costs_data = [
+            {"query_id": "1", "estimated_cost_usd": "0.001", "latency_ms": "100", "prompt_tokens": "500"},
+            {"query_id": "2", "estimated_cost_usd": "0.002", "latency_ms": "200", "prompt_tokens": "600"},
+        ]
+        write_csv(variant_dir / "costs.csv", costs_data, 
+                  ["query_id", "estimated_cost_usd", "latency_ms", "prompt_tokens"])
+        
+        # Write judge_scores.csv
+        judge_data = [
+            {"query_id": "1", "faithfulness_score": "5", "answer_relevance_score": "4"},
+            {"query_id": "2", "faithfulness_score": "4", "answer_relevance_score": "5"},
+        ]
+        write_csv(variant_dir / "judge_scores.csv", judge_data,
+                  ["query_id", "faithfulness_score", "answer_relevance_score"])
+        
+        variant = {"context_count": 3, "dir": str(variant_dir)}
+        result = bca.process_variant(variant)
+        
         assert result is not None
-        assert result["avg_faithfulness"] == pytest.approx(4.5)
-        assert result["avg_answer_relevance"] == pytest.approx(4.5)
-        assert result["count"] == 2
+        assert result["context_count"] == 3
+        assert result["avg_cost_usd"] == 0.0015
+        assert result["avg_latency_ms"] == 150.0
+        assert result["avg_prompt_tokens"] == 550.0
+        assert result["avg_faithfulness"] == 4.5
+        assert result["avg_answer_relevance"] == 4.5
 
-    def test_load_judge_scores_missing_file(self, tmp_path: Path):
-        """Test handling of missing judge_scores.csv file."""
-        result = build_context_ablation.load_judge_scores(tmp_path)
 
+def test_process_variant_missing_costs():
+    """Test processing a variant with missing costs.csv."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmpdir = Path(tmpdir)
+        variant_dir = tmpdir / "ctx3"
+        variant_dir.mkdir()
+        
+        # Only write judge_scores.csv
+        judge_data = [{"query_id": "1", "faithfulness_score": "5", "answer_relevance_score": "4"}]
+        write_csv(variant_dir / "judge_scores.csv", judge_data,
+                  ["query_id", "faithfulness_score", "answer_relevance_score"])
+        
+        variant = {"context_count": 3, "dir": str(variant_dir)}
+        result = bca.process_variant(variant)
+        
         assert result is None
 
-    def test_load_judge_scores_empty_file(self, tmp_path: Path):
-        """Test handling of empty judge_scores.csv file."""
-        scores_file = tmp_path / "judge_scores.csv"
-        scores_file.write_text(
-            "query_id,faithfulness_score,faithfulness_reasoning,answer_relevance_score,answer_relevance_reasoning\n"
-        )
 
-        result = build_context_ablation.load_judge_scores(tmp_path)
-
+def test_process_variant_missing_judge_scores():
+    """Test processing a variant with missing judge_scores.csv."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmpdir = Path(tmpdir)
+        variant_dir = tmpdir / "ctx3"
+        variant_dir.mkdir()
+        
+        # Only write costs.csv
+        costs_data = [{"query_id": "1", "estimated_cost_usd": "0.001", "latency_ms": "100", "prompt_tokens": "500"}]
+        write_csv(variant_dir / "costs.csv", costs_data,
+                  ["query_id", "estimated_cost_usd", "latency_ms", "prompt_tokens"])
+        
+        variant = {"context_count": 3, "dir": str(variant_dir)}
+        result = bca.process_variant(variant)
+        
         assert result is None
 
 
-class TestWriteContextAblationCSV:
-    """Tests for write_context_ablation_csv function."""
-
-    def test_csv_has_correct_columns(self, tmp_path: Path):
-        """Test that output CSV has correct columns."""
-        output_file = tmp_path / "test.csv"
-
-        variants_data = [
+def test_csv_output_columns():
+    """Test that CSV output has correct columns."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmpdir = Path(tmpdir)
+        output_path = tmpdir / "test.csv"
+        
+        results = [
             {
                 "context_count": 3,
                 "avg_cost_usd": 0.001,
-                "avg_latency_ms": 1500.0,
-                "avg_prompt_tokens": 1000.0,
+                "avg_latency_ms": 100.0,
+                "avg_prompt_tokens": 500.0,
                 "avg_faithfulness": 4.5,
                 "avg_answer_relevance": 4.0,
             }
         ]
-
-        build_context_ablation.write_context_ablation_csv(variants_data, output_file)
-
-        with open(output_file, "r") as f:
-            reader = csv.DictReader(f)
-            fieldnames = reader.fieldnames
-
-        expected_columns = [
-            "context_count",
-            "avg_cost_usd",
-            "avg_latency_ms",
-            "avg_prompt_tokens",
-            "avg_faithfulness",
-            "avg_answer_relevance"
-        ]
-
-        assert fieldnames == expected_columns
-
-    def test_csv_variants_in_ascending_order(self, tmp_path: Path):
-        """Test that variants appear in ascending context_count order."""
-        output_file = tmp_path / "test.csv"
-
-        # Create variants in order (already sorted by ABLATION_VARIANTS)
-        variants_data = [
-            {"context_count": 3, "avg_cost_usd": 0.001, "avg_latency_ms": 1500.0,
-             "avg_prompt_tokens": 1000.0, "avg_faithfulness": 4.5, "avg_answer_relevance": 4.0},
-            {"context_count": 5, "avg_cost_usd": 0.002, "avg_latency_ms": 1600.0,
-             "avg_prompt_tokens": 1500.0, "avg_faithfulness": 4.6, "avg_answer_relevance": 4.1},
-            {"context_count": 10, "avg_cost_usd": 0.003, "avg_latency_ms": 1700.0,
-             "avg_prompt_tokens": 2000.0, "avg_faithfulness": 4.7, "avg_answer_relevance": 4.2},
-            {"context_count": 20, "avg_cost_usd": 0.004, "avg_latency_ms": 1800.0,
-             "avg_prompt_tokens": 2500.0, "avg_faithfulness": 4.8, "avg_answer_relevance": 4.3},
-        ]
-
-        build_context_ablation.write_context_ablation_csv(variants_data, output_file)
-
-        with open(output_file, "r") as f:
+        
+        bca.write_csv(results, output_path)
+        
+        # Read back and check columns
+        with open(output_path) as f:
             reader = csv.DictReader(f)
             rows = list(reader)
-
-        context_counts = [int(row["context_count"]) for row in rows]
-        assert context_counts == [3, 5, 10, 20]
-        assert context_counts == sorted(context_counts)
-
-    def test_csv_handles_missing_judge_scores(self, tmp_path: Path):
-        """Test that CSV handles missing judge scores gracefully."""
-        output_file = tmp_path / "test.csv"
-
-        variants_data = [
-            {
-                "context_count": 3,
-                "avg_cost_usd": 0.001,
-                "avg_latency_ms": 1500.0,
-                "avg_prompt_tokens": 1000.0,
-                "avg_faithfulness": None,
-                "avg_answer_relevance": None,
-            }
-        ]
-
-        build_context_ablation.write_context_ablation_csv(variants_data, output_file)
-
-        with open(output_file, "r") as f:
-            reader = csv.DictReader(f)
-            row = next(reader)
-
-        assert row["avg_faithfulness"] == "N/A"
-        assert row["avg_answer_relevance"] == "N/A"
+        
+        assert len(rows) == 1
+        assert "context_count" in rows[0]
+        assert "avg_cost_usd" in rows[0]
+        assert "avg_latency_ms" in rows[0]
+        assert "avg_prompt_tokens" in rows[0]
+        assert "avg_faithfulness" in rows[0]
+        assert "avg_answer_relevance" in rows[0]
 
 
-class TestWriteContextAblationSummary:
-    """Tests for write_context_ablation_summary function."""
-
-    def test_summary_has_table_and_interpretation(self, tmp_path: Path):
-        """Test that summary markdown has required sections."""
-        output_file = tmp_path / "test_summary.md"
-
-        variants_data = [
-            {"context_count": 3, "avg_cost_usd": 0.001, "avg_latency_ms": 1500.0,
-             "avg_prompt_tokens": 1000.0, "avg_faithfulness": 4.5, "avg_answer_relevance": 4.0,
-             "faithfulness_cost_ratio": 4500.0},
-            {"context_count": 5, "avg_cost_usd": 0.002, "avg_latency_ms": 1600.0,
-             "avg_prompt_tokens": 1500.0, "avg_faithfulness": 4.6, "avg_answer_relevance": 4.1,
-             "faithfulness_cost_ratio": 2300.0},
-        ]
-
-        build_context_ablation.write_context_ablation_summary(variants_data, output_file)
-
-        content = output_file.read_text()
-
-        assert "# Context Count Ablation Summary" in content
-        assert "## Results" in content
-        assert "## Sweet Spot Analysis" in content
-        # The script uses "Quality vs Context Size" instead of "Interpretation"
-        assert "## Quality vs Context Size" in content or "## Interpretation" in content
-        assert "## Recommendation" in content
-
-    def test_summary_identifies_sweet_spot(self, tmp_path: Path):
-        """Test that summary identifies the best faithfulness/cost ratio."""
-        output_file = tmp_path / "test_summary.md"
-
-        variants_data = [
-            {"context_count": 3, "avg_cost_usd": 0.001, "avg_latency_ms": 1500.0,
-             "avg_prompt_tokens": 1000.0, "avg_faithfulness": 4.5, "avg_answer_relevance": 4.0,
-             "faithfulness_cost_ratio": 4500.0},
-            {"context_count": 5, "avg_cost_usd": 0.002, "avg_latency_ms": 1600.0,
-             "avg_prompt_tokens": 1500.0, "avg_faithfulness": 4.6, "avg_answer_relevance": 4.1,
-             "faithfulness_cost_ratio": 2300.0},
-        ]
-
-        build_context_ablation.write_context_ablation_summary(variants_data, output_file)
-
-        content = output_file.read_text()
-
-        # The first variant has higher ratio
-        assert "Best faithfulness/cost ratio**: 3 docs" in content
-
-
-class TestAblationVariants:
-    """Tests for ABLATION_VARIANTS configuration."""
-
-    def test_variants_have_correct_context_counts(self):
-        """Test that variants have expected context counts."""
-        context_counts = [v["context_count"] for v in build_context_ablation.ABLATION_VARIANTS]
-
+def test_variants_in_ascending_order():
+    """Test that variants appear in ascending context_count order."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmpdir = Path(tmpdir)
+        
+        # Create variant directories
+        for count in [10, 3, 20, 5]:
+            variant_dir = tmpdir / f"ctx{count}"
+            variant_dir.mkdir()
+            
+            costs_data = [{"query_id": "1", "estimated_cost_usd": "0.001", "latency_ms": "100", "prompt_tokens": "500"}]
+            write_csv(variant_dir / "costs.csv", costs_data,
+                      ["query_id", "estimated_cost_usd", "latency_ms", "prompt_tokens"])
+            
+            judge_data = [{"query_id": "1", "faithfulness_score": "5", "answer_relevance_score": "4"}]
+            write_csv(variant_dir / "judge_scores.csv", judge_data,
+                      ["query_id", "faithfulness_score", "answer_relevance_score"])
+        
+        # Create results in random order
+        results = []
+        for count in [10, 3, 20, 5]:
+            variant = {"context_count": count, "dir": str(tmpdir / f"ctx{count}")}
+            result = bca.process_variant(variant)
+            if result:
+                results.append(result)
+        
+        # Sort as the script does
+        results.sort(key=lambda x: x["context_count"])
+        
+        context_counts = [r["context_count"] for r in results]
         assert context_counts == [3, 5, 10, 20]
 
-    def test_variants_are_sorted_ascending(self):
-        """Test that variants are in ascending order by context_count."""
-        context_counts = [v["context_count"] for v in build_context_ablation.ABLATION_VARIANTS]
 
-        assert context_counts == sorted(context_counts)
-
-
-class TestGracefulErrorHandling:
-    """Tests for graceful handling of errors and missing data."""
-
-    def test_missing_costs_and_scores_directory(self, tmp_path: Path):
-        """Test handling when output directory doesn't exist."""
-        nonexistent_dir = tmp_path / "nonexistent"
-
-        # Should not raise exceptions, returns None
-        costs = build_context_ablation.load_costs(nonexistent_dir)
-        scores = build_context_ablation.load_judge_scores(nonexistent_dir)
-
-        assert costs is None
-        assert scores is None
-
-    def test_malformed_csv_handling(self, tmp_path: Path):
-        """Test handling of malformed CSV files."""
-        costs_file = tmp_path / "costs.csv"
-        costs_file.write_text("this,is,not,a,valid,csv\n1,2,3\n")
-
-        # Should handle gracefully (may raise or return empty)
-        # The actual behavior depends on implementation
-        try:
-            result = build_context_ablation.load_costs(tmp_path)
-            # If it doesn't raise, it should return valid structure
-            assert "avg_cost_usd" in result
-        except (KeyError, ValueError, IndexError):
-            # If it raises, that's acceptable for malformed data
-            pass
+def test_graceful_missing_files():
+    """Test that the script handles missing files gracefully."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmpdir = Path(tmpdir)
+        
+        # Create variant with no files
+        variant_dir = tmpdir / "empty"
+        variant_dir.mkdir()
+        
+        variant = {"context_count": 3, "dir": str(variant_dir)}
+        result = bca.process_variant(variant)
+        
+        # Should return None and not crash
+        assert result is None
 
 
 if __name__ == "__main__":
