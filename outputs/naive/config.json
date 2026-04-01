@@ -1,0 +1,13 @@
+{
+  "dataset": "scifact",
+  "data_dir": "datasets",
+  "model_name": "sentence-transformers/all-MiniLM-L6-v2",
+  "rerank": true,
+  "rerank_model": "cross-encoder/ms-marco-MiniLM-L-6-v2",
+  "rerank_k": 10,
+  "llm_model": "openai/gpt-4o",
+  "llm_temperature": 0.0,
+  "top_k": 100,
+  "demo_subset": null,
+  "output_dir": "outputs/naive"
+}

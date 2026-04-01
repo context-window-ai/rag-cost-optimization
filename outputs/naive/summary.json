@@ -1,0 +1,21 @@
+{
+  "config": {
+    "dataset": "scifact",
+    "data_dir": "datasets",
+    "model_name": "sentence-transformers/all-MiniLM-L6-v2",
+    "rerank": true,
+    "rerank_model": "cross-encoder/ms-marco-MiniLM-L-6-v2",
+    "rerank_k": 10,
+    "rerank_top_k": 10,
+    "llm_model": "openai/gpt-5.4-mini",
+    "llm_temperature": 0.0,
+    "top_k": 100,
+    "demo_subset": null,
+    "output_dir": "outputs/naive"
+  },
+  "retriever_type": "dense",
+  "total_queries": 50,
+  "total_cost_usd": 0.1647,
+  "avg_latency_ms": 2061.56,
+  "total_time_seconds": 103.11
+}
