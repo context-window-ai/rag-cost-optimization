@@ -1,4 +1,4 @@
-"""Dense retrieval with FAISS backend."""
+"""Dense, BM25, and Hybrid retrieval implementations."""
 
 import json
 from pathlib import Path
@@ -6,6 +6,7 @@ from typing import Optional
 
 import faiss
 import numpy as np
+from rank_bm25 import BM25Okapi
 from sentence_transformers import SentenceTransformer
 
 
@@ -147,3 +148,201 @@ class FAISSRetriever:
 
 # Alias for backwards compatibility
 DenseRetriever = FAISSRetriever
+
+
+class BM25Retriever:
+    """BM25-based sparse retriever using rank_bm25."""
+
+    def __init__(self):
+        self.index: Optional[BM25Okapi] = None
+        self.doc_ids: list[str] = []
+        self.doc_texts: list[str] = []
+
+    def index_documents(self, doc_ids: list[str], doc_texts: list[str]) -> None:
+        """Build BM25Okapi index from documents."""
+        if len(doc_ids) != len(doc_texts):
+            raise ValueError("doc_ids and doc_texts must have same length")
+
+        self.doc_ids = doc_ids
+        self.doc_texts = doc_texts
+
+        # Tokenize documents (simple whitespace tokenization)
+        tokenized_docs = [text.lower().split() for text in doc_texts]
+        self.index = BM25Okapi(tokenized_docs)
+
+    def search(self, queries: list[str], top_k: int = 100) -> dict[str, list[tuple[str, float]]]:
+        """Search for top-k documents per query.
+
+        Returns:
+            Dict mapping query -> list of (doc_id, score) tuples
+        """
+        if self.index is None:
+            raise RuntimeError("Index not built. Call index_documents first.")
+
+        results = {}
+        for query in queries:
+            tokenized_query = query.lower().split()
+            scores = self.index.get_scores(tokenized_query)
+
+            # Normalize scores to [0, 1] range (divide by max score)
+            max_score = max(scores) if max(scores) > 0 else 1.0
+            normalized_scores = [s / max_score for s in scores]
+
+            # Get top-k indices
+            top_indices = sorted(
+                range(len(scores)), key=lambda i: scores[i], reverse=True
+            )[:top_k]
+
+            results[query] = [
+                (self.doc_ids[idx], float(normalized_scores[idx]))
+                for idx in top_indices
+            ]
+
+        return results
+
+    def build_index(self, corpus: dict) -> None:
+        """Build BM25 index from BEIR corpus format.
+        
+        Args:
+            corpus: Dict mapping doc_id -> {'title': str, 'text': str}
+        """
+        doc_ids = list(corpus.keys())
+        doc_texts = [
+            f"{corpus[doc_id].get('title', '')} {corpus[doc_id].get('text', '')}".strip()
+            for doc_id in doc_ids
+        ]
+        self.index_documents(doc_ids, doc_texts)
+
+    def retrieve(self, queries: dict, top_k: int = 100) -> dict:
+        """Retrieve top-k documents for each query.
+        
+        Args:
+            queries: Dict mapping query_id -> query_text
+            top_k: Number of documents to retrieve per query
+            
+        Returns:
+            Dict mapping query_id -> {doc_id: score}
+        """
+        query_ids = list(queries.keys())
+        query_texts = [queries[qid] for qid in query_ids]
+        
+        raw_results = self.search(query_texts, top_k=top_k)
+        
+        # Remap to query_id keys
+        results = {}
+        for query_id, query_text in zip(query_ids, query_texts):
+            results[query_id] = {
+                doc_id: score for doc_id, score in raw_results[query_text]
+            }
+        
+        return results
+
+
+class HybridRetriever:
+    """Hybrid retriever combining dense (FAISS) and sparse (BM25) retrieval."""
+
+    def __init__(self, dense_weight: float = 0.5, dense_model_name: str = "sentence-transformers/all-MiniLM-L6-v2"):
+        """Initialize hybrid retriever.
+        
+        Args:
+            dense_weight: Weight for dense scores (0-1). BM25 gets (1 - dense_weight).
+            dense_model_name: Model name for dense retriever.
+        """
+        if not 0 <= dense_weight <= 1:
+            raise ValueError("dense_weight must be between 0 and 1")
+        
+        self.dense_weight = dense_weight
+        self.dense_retriever = FAISSRetriever(model_name=dense_model_name)
+        self.bm25_retriever = BM25Retriever()
+        self.doc_ids: list[str] = []
+
+    def index_documents(self, doc_ids: list[str], doc_texts: list[str], batch_size: int = 32) -> None:
+        """Build both dense and sparse indices."""
+        if len(doc_ids) != len(doc_texts):
+            raise ValueError("doc_ids and doc_texts must have same length")
+        
+        self.doc_ids = doc_ids
+        self.dense_retriever.index_documents(doc_ids, doc_texts, batch_size=batch_size)
+        self.bm25_retriever.index_documents(doc_ids, doc_texts)
+
+    def search(self, queries: list[str], top_k: int = 100, batch_size: int = 32) -> dict[str, list[tuple[str, float]]]:
+        """Search using reciprocal rank fusion (RRF) with k=60.
+        
+        For each doc: score = dense_weight/(rank_dense+60) + (1-dense_weight)/(rank_bm25+60)
+        Then take top_k by combined score.
+        
+        Returns:
+            Dict mapping query -> list of (doc_id, score) tuples
+        """
+        if self.dense_retriever.index is None:
+            raise RuntimeError("Index not built. Call index_documents first.")
+        
+        # Get results from both retrievers (with higher k for better fusion)
+        retrieval_k = min(top_k * 5, len(self.doc_ids))  # Get more docs for better fusion
+        dense_results = self.dense_retriever.search(queries, top_k=retrieval_k, batch_size=batch_size)
+        bm25_results = self.bm25_retriever.search(queries, top_k=retrieval_k)
+        
+        results = {}
+        for query in queries:
+            # Build rank dictionaries (1-indexed)
+            dense_ranks = {doc_id: rank + 1 for rank, (doc_id, _) in enumerate(dense_results[query])}
+            bm25_ranks = {doc_id: rank + 1 for rank, (doc_id, _) in enumerate(bm25_results[query])}
+            
+            # Get all doc_ids from both result sets
+            all_doc_ids = set(dense_ranks.keys()) | set(bm25_ranks.keys())
+            
+            # Compute RRF scores
+            rrf_scores = {}
+            for doc_id in all_doc_ids:
+                dense_rank = dense_ranks.get(doc_id, retrieval_k + 1)
+                bm25_rank = bm25_ranks.get(doc_id, retrieval_k + 1)
+                
+                # RRF formula: weighted combination
+                rrf_score = (
+                    self.dense_weight / (dense_rank + 60) +
+                    (1 - self.dense_weight) / (bm25_rank + 60)
+                )
+                rrf_scores[doc_id] = rrf_score
+            
+            # Sort by RRF score and take top_k
+            sorted_docs = sorted(rrf_scores.items(), key=lambda x: x[1], reverse=True)[:top_k]
+            results[query] = sorted_docs
+        
+        return results
+
+    def build_index(self, corpus: dict) -> None:
+        """Build hybrid index from BEIR corpus format.
+        
+        Args:
+            corpus: Dict mapping doc_id -> {'title': str, 'text': str}
+        """
+        doc_ids = list(corpus.keys())
+        doc_texts = [
+            f"{corpus[doc_id].get('title', '')} {corpus[doc_id].get('text', '')}".strip()
+            for doc_id in doc_ids
+        ]
+        self.index_documents(doc_ids, doc_texts)
+
+    def retrieve(self, queries: dict, top_k: int = 100) -> dict:
+        """Retrieve top-k documents for each query.
+        
+        Args:
+            queries: Dict mapping query_id -> query_text
+            top_k: Number of documents to retrieve per query
+            
+        Returns:
+            Dict mapping query_id -> {doc_id: score}
+        """
+        query_ids = list(queries.keys())
+        query_texts = [queries[qid] for qid in query_ids]
+        
+        raw_results = self.search(query_texts, top_k=top_k)
+        
+        # Remap to query_id keys
+        results = {}
+        for query_id, query_text in zip(query_ids, query_texts):
+            results[query_id] = {
+                doc_id: score for doc_id, score in raw_results[query_text]
+            }
+        
+        return results
