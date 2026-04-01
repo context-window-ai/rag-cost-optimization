@@ -15,7 +15,7 @@ import yaml
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from rag_retrieval.data import download_and_load_dataset
-from rag_retrieval.retriever import FAISSRetriever
+from rag_retrieval.retriever import FAISSRetriever, BM25Retriever, HybridRetriever
 from rag_retrieval.pipeline import NaiveRAGPipeline, OptimizedRAGPipeline, write_outputs
 
 logging.basicConfig(
@@ -40,6 +40,7 @@ def main():
     parser.add_argument("--configs_dir", default="configs", help="Directory containing config files")
     parser.add_argument("--data_dir", default=None, help="Directory to store BEIR datasets (overrides config)")
     parser.add_argument("--demo", type=int, default=None, help="Run only first N queries (overrides config)")
+    parser.add_argument("--retriever", choices=["bm25", "dense", "hybrid"], default=None, help="Retriever type (overrides config)")
     args = parser.parse_args()
 
     # Load config
@@ -58,9 +59,21 @@ def main():
     corpus, queries, qrels = download_and_load_dataset(dataset, data_dir)
     logger.info(f"Corpus size: {len(corpus)}, Queries: {len(queries)}")
 
+    # Determine retriever type (CLI overrides config)
+    retriever_type = args.retriever if args.retriever else config.get("retriever", "dense")
+    logger.info(f"Retriever type: {retriever_type}")
+    
     # Build retriever
     logger.info("Building retriever index...")
-    retriever = FAISSRetriever(model_name=config.get("embedding_model", "sentence-transformers/all-MiniLM-L6-v2"))
+    embedding_model = config.get("embedding_model", "sentence-transformers/all-MiniLM-L6-v2")
+    
+    if retriever_type == "bm25":
+        retriever = BM25Retriever()
+    elif retriever_type == "hybrid":
+        retriever = HybridRetriever(dense_model_name=embedding_model)
+    else:  # dense (default)
+        retriever = FAISSRetriever(model_name=embedding_model)
+    
     retriever.build_index(corpus)
     logger.info("Index built successfully")
 
@@ -136,6 +149,7 @@ def main():
     avg_latency = sum(r.cost_record.latency_ms for r in results) / len(results) if results else 0
     summary = {
         "config": config,
+        "retriever_type": retriever_type,
         "total_queries": len(results),
         "total_cost_usd": round(total_cost, 4),
         "avg_latency_ms": round(avg_latency, 2),
