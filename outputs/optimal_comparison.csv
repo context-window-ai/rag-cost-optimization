@@ -1,0 +1,3 @@
+config,avg_cost_usd,avg_latency_ms,avg_faithfulness,avg_answer_relevance
+naive,0.0032945,2061.5576,4.74,4.58
+optimal,0.0003841,1698.775,4.78,4.6
