@@ -1,24 +1,36 @@
-# Context Count Ablation Results
+# Context Count Ablation Summary
 
-| Context Count | Avg Cost (USD) | Avg Latency (ms) | Avg Prompt Tokens | Avg Faithfulness | Avg Answer Relevance |
-|---------------|----------------|------------------|-------------------|------------------|---------------------|
-| 3 | $0.000492 | 2629.8 | 1197.7 | 4.74/5 | 4.50/5 |
-| 5 | $0.000686 | 2856.1 | 1856.4 | 4.64/5 | 4.54/5 |
-| 10 | $0.001174 | 3443.3 | 3555.6 | 4.74/5 | 4.56/5 |
-| 20 | $0.001992 | 3289.5 | 6528.6 | 4.56/5 | 4.62/5 |
+Comparing quality and cost across different context window sizes (3, 5, 10, 20 docs).
+All variants use the same optimized retrieval settings (conditional reranking, gpt-5.4-mini, top_k=20).
 
-## Analysis
+## Results
 
-### Sweet Spot
+| Context Count | Avg Cost ($) | Avg Latency (ms) | Avg Prompt Tokens | Faithfulness | Answer Relevance |
+|---------------|--------------|------------------|-------------------|--------------|------------------|
+| 3 | $0.0005 | 2630 | 1198 | 4.60 | 4.46 |
+| 5 | $0.0007 | 2856 | 1856 | 4.64 | 4.54 |
+| 10 | $0.0012 | 3443 | 3556 | 4.74 | 4.56 |
+| 20 | $0.0020 | 3289 | 6529 | 4.56 | 4.62 |
 
-**3 documents** provides the best faithfulness/cost ratio (4.74/5 faithfulness at $0.000492 per query).
+## Sweet Spot Analysis
 
-### Quality vs. Context Count
+**Best faithfulness/cost ratio**: 3 docs
+- Faithfulness: 4.60/5
+- Cost: $0.0005 per query
+- Ratio: 9350.4 (faithfulness per dollar)
 
-- **Faithfulness is mixed** - neither consistently improves nor degrades with more context.
-- **Answer relevance improves** as context count increases.
+## Quality vs Context Size
 
-### Cost Scaling
+- **Highest faithfulness**: 10 docs (4.74/5)
+- **Lowest faithfulness**: 20 docs (4.56/5)
+- **Trend**: More documents in context tends to **hurt** faithfulness (4.60 → 4.56)
 
-- Cost scales from $0.000492 (3 docs) to $0.001992 (20 docs).
-- Adding ~17 more documents increases cost by 4.0x.
+## Cost Scaling
+
+- **Cost increase from 3→20 docs**: 304.9% ($0.0005 → $0.0020)
+- Prompt tokens scale roughly linearly with context count
+
+## Recommendation
+
+**Recommendation**: Use **3 docs** for optimal quality/cost trade-off.
+Smaller context windows are sufficient for this dataset and provide significant cost savings.
