@@ -1,0 +1,5 @@
+context_count,avg_cost_usd,avg_latency_ms,avg_prompt_tokens,avg_faithfulness,avg_answer_relevance
+3,0.000492,2629.8,1198,4.60,4.46
+5,0.000686,2856.1,1856,4.64,4.54
+10,0.001174,3443.3,3556,4.74,4.56
+20,0.001992,3289.5,6529,4.56,4.62

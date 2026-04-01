@@ -1,0 +1,12 @@
+dataset: scifact
+data_dir: datasets
+embedding_model: sentence-transformers/all-MiniLM-L6-v2
+rerank: true
+rerank_model: cross-encoder/ms-marco-MiniLM-L-6-v2
+llm_model: openai/gpt-5.4-mini
+llm_temperature: 0.0
+top_k: 20
+conditional_rerank: true
+rerank_skip_threshold: 0.85
+rerank_k: 3
+output_dir: outputs/context_ablation/ctx3
